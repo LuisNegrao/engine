@@ -30,6 +30,9 @@ testing {
             targets.all {
                 testTask.configure {
                     shouldRunAfter(test)
+                    // The external Redis is state Gradle cannot track as an input;
+                    // never let this task be skipped as up-to-date.
+                    outputs.upToDateWhen { false }
                 }
             }
         }
