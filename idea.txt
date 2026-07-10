@@ -1,0 +1,14 @@
+I want to build a complex project.
+The idea is to build a complex trading engine capable of trading severall products like stocks, fututres, commodities, crypto etc...
+The engine should be able to handle long short and medium term strategies.
+
+In my mind this egine at a high level should have the following components:
+	Data feed: From here i imagine we would be getting tick data from different exchanges. I would also like to have some sort of news analyzes tool i am just no
+		sure if it is its own module or if it is somehow part of the datafeed. I magine that then subsequent parts of the code could the subscrie to the data feeds we have that are relevant
+		to their stratefies
+	Strategie execution: I imagine this should be the place where the strategy gets coded and performs the executions. This must support backtesting, paper trading a live trading. This should generate 
+		relevant metric in real time.
+	UI: We need an UI that will allow following the performance of active strategies, backtests etc... This should also allow the termination of strategies.
+	
+From the top of my head i dont see we need anything else.
+What i want you to do is to first avaluate if what i wrote maskes sense. Make suggestions if imporvements can be made. Suggest tecnologies and provide a high level architecture diagram. 	
