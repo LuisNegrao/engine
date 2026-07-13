@@ -1,9 +1,12 @@
 [versions]
 lettuce = "6.5.5.RELEASE"   # check latest 6.x
+jackson = "2.19.0"          # check latest 2.x
 junit = "5.11.4"
 assertj = "3.27.3"
 
 [libraries]
 lettuce = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310", version.ref = "jackson" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
