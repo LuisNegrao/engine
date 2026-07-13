@@ -6,6 +6,11 @@ plugins {
 }
 
 dependencies {
+    // Jackson is confined to engine.core.serde — kept as `implementation`, never `api`,
+    // so JSON types never leak past core's boundary and the wire format stays swappable.
+    implementation(libs.jackson.databind)
+    implementation(libs.jackson.jsr310)
+
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
