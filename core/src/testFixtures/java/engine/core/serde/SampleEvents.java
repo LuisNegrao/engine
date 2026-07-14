@@ -26,19 +26,19 @@ import java.util.UUID;
  * (e.g. {@code "67231.50"}) so that a passing round-trip also proves scale is preserved on the wire
  * — {@link BigDecimal#equals} is scale-sensitive.
  */
-final class SampleEvents {
+public final class SampleEvents {
 
     private SampleEvents() {}
 
-    static final InstrumentId BTC = InstrumentId.parse("BTC-USDT.BINANCE");
-    static final Instant OCCURRED = Instant.parse("2026-07-10T14:03:22.113Z");
-    static final Instant INGESTED = Instant.parse("2026-07-10T14:03:22.145Z");
+    public static final InstrumentId BTC = InstrumentId.parse("BTC-USDT.BINANCE");
+    public static final Instant OCCURRED = Instant.parse("2026-07-10T14:03:22.113Z");
+    public static final Instant INGESTED = Instant.parse("2026-07-10T14:03:22.145Z");
 
-    static Event tradeTick() {
+    public static Event tradeTick() {
         return event(BTC, new TradeTick(new BigDecimal("67231.50"), new BigDecimal("0.0042"), Side.BUY));
     }
 
-    static Event quoteTick() {
+    public static Event quoteTick() {
         return event(
                 BTC,
                 new QuoteTick(
@@ -48,7 +48,7 @@ final class SampleEvents {
                         new BigDecimal("2.0000")));
     }
 
-    static Event bar() {
+    public static Event bar() {
         return event(
                 BTC,
                 new Bar(
@@ -61,11 +61,11 @@ final class SampleEvents {
                         new BigDecimal("1500.00")));
     }
 
-    static Event signal() {
+    public static Event signal() {
         return event(BTC, new Signal("sentiment", new BigDecimal("0.750"), new BigDecimal("0.90")));
     }
 
-    static Event orderIntent() {
+    public static Event orderIntent() {
         return event(
                 BTC,
                 new OrderIntent(
@@ -78,7 +78,7 @@ final class SampleEvents {
                         "client-order-1"));
     }
 
-    static Event fill() {
+    public static Event fill() {
         return event(
                 BTC,
                 new Fill(
@@ -90,16 +90,16 @@ final class SampleEvents {
                         false));
     }
 
-    static Event metric() {
+    public static Event metric() {
         return event(BTC, new Metric("pnl.unrealized", new BigDecimal("1234.50"), "strat-momentum"));
     }
 
-    static Event command() {
+    public static Event command() {
         // Command is instrument-agnostic: instrumentId is absent (null) on the envelope.
         return event(null, new Command("*", CommandAction.KILL, Map.of("reason", "max-drawdown")));
     }
 
-    static List<Event> all() {
+    public static List<Event> all() {
         return List.of(tradeTick(), quoteTick(), bar(), signal(), orderIntent(), fill(), metric(), command());
     }
 
