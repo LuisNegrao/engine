@@ -2,6 +2,7 @@ package engine.core.event;
 
 import java.math.BigDecimal;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * A strategy's request to trade. Strategies emit intents only — the OMS/Risk layers turn them into
@@ -37,5 +38,10 @@ public record OrderIntent(
         } else if (limitPrice != null) {
             throw new IllegalArgumentException("limitPrice must be null for a " + orderType + " order");
         }
+    }
+
+    /** The limit price; empty for a {@code MARKET} order. */
+    public Optional<BigDecimal> maybeLimitPrice() {
+        return Optional.ofNullable(limitPrice);
     }
 }

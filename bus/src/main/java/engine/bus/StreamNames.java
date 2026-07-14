@@ -4,6 +4,7 @@ import engine.core.event.Bar;
 import engine.core.event.Command;
 import engine.core.event.Event;
 import engine.core.event.Fill;
+import engine.core.event.InstrumentId;
 import engine.core.event.Metric;
 import engine.core.event.OrderIntent;
 import engine.core.event.QuoteTick;
@@ -56,11 +57,10 @@ public final class StreamNames {
     }
 
     private static String requireInstrument(Event event) {
-        if (event.instrumentId() == null) {
-            throw new IllegalArgumentException("instrumentId is required to route a "
-                    + event.payload().getClass().getSimpleName() + " but was null");
-        }
-        return event.instrumentId().toString();
+        return event.maybeInstrumentId()
+                .map(InstrumentId::toString)
+                .orElseThrow(() -> new IllegalArgumentException("instrumentId is required to route a "
+                        + event.payload().getClass().getSimpleName() + " but was null"));
     }
 
     private static String intervalToken(Duration interval) {
