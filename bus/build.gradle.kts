@@ -15,6 +15,7 @@ testing {
             useJUnitJupiter(libs.versions.junit.get())
             dependencies {
                 implementation(libs.assertj)
+                implementation(testFixtures(project(":core")))
             }
         }
 
