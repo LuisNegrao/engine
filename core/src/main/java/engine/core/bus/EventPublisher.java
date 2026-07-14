@@ -1,4 +1,4 @@
-package engine.bus;
+package engine.core.bus;
 
 import engine.core.event.Event;
 import java.util.concurrent.CompletionStage;
