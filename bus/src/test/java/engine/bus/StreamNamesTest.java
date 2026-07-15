@@ -6,12 +6,10 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import engine.core.event.Bar;
 import engine.core.event.Event;
-import engine.core.event.InstrumentId;
 import engine.core.event.Payload;
 import engine.core.serde.SampleEvents;
 import java.time.Duration;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -62,7 +60,7 @@ class StreamNamesTest {
     @ParameterizedTest
     @MethodSource("instrumentScopedPayloads")
     void instrumentScopedPayloadWithoutInstrumentThrows(Payload payload) {
-        Event event = event(null, payload);
+        Event event = SampleEvents.event(null, payload);
 
         assertThatThrownBy(() -> StreamNames.streamFor(event))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -71,24 +69,25 @@ class StreamNamesTest {
 
     @Test
     void singleStreamPayloadsRouteTheSameWithOrWithoutInstrument() {
-        assertThat(StreamNames.streamFor(
-                        event(SampleEvents.BTC, SampleEvents.metric().payload())))
+        assertThat(StreamNames.streamFor(SampleEvents.event(
+                        SampleEvents.BTC, SampleEvents.metric().payload())))
                 .isEqualTo("metrics");
-        assertThat(StreamNames.streamFor(event(null, SampleEvents.metric().payload())))
+        assertThat(StreamNames.streamFor(
+                        SampleEvents.event(null, SampleEvents.metric().payload())))
                 .isEqualTo("metrics");
     }
 
     @ParameterizedTest
     @CsvSource({"PT1M, 1m", "PT5M, 5m", "PT15M, 15m", "PT1H, 1h", "PT4H, 4h", "P1D, 1d"})
     void everyVocabularyIntervalMaps(Duration interval, String token) {
-        Event event = event(SampleEvents.BTC, barWith(interval));
+        Event event = SampleEvents.event(SampleEvents.BTC, barWith(interval));
 
         assertThat(StreamNames.streamFor(event)).isEqualTo("md.bar." + token + ".BTC-USDT.BINANCE");
     }
 
     @Test
     void barIntervalOutsideTheVocabularyThrowsNamingTheDuration() {
-        Event event = event(SampleEvents.BTC, barWith(Duration.ofSeconds(90)));
+        Event event = SampleEvents.event(SampleEvents.BTC, barWith(Duration.ofSeconds(90)));
 
         assertThatThrownBy(() -> StreamNames.streamFor(event))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -105,10 +104,5 @@ class StreamNamesTest {
                 sample.low(),
                 sample.close(),
                 sample.volume());
-    }
-
-    private static Event event(InstrumentId instrumentId, Payload payload) {
-        return new Event(
-                UUID.randomUUID(), "test-feed", instrumentId, SampleEvents.OCCURRED, SampleEvents.INGESTED, payload);
     }
 }

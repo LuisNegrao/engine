@@ -103,7 +103,8 @@ public final class SampleEvents {
         return List.of(tradeTick(), quoteTick(), bar(), signal(), orderIntent(), fill(), metric(), command());
     }
 
-    private static Event event(InstrumentId instrumentId, engine.core.event.Payload payload) {
+    /** Builds a test envelope with source {@code "test-feed"} and the fixed OCCURRED/INGESTED instants. */
+    public static Event event(InstrumentId instrumentId, engine.core.event.Payload payload) {
         return new Event(UUID.randomUUID(), "test-feed", instrumentId, OCCURRED, INGESTED, payload);
     }
 }
