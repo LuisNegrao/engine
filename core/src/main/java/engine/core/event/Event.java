@@ -3,6 +3,7 @@ package engine.core.event;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -36,6 +37,11 @@ public record Event(
         Objects.requireNonNull(ingestedAt, "ingestedAt must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
         // instrumentId is nullable by design.
+    }
+
+    /** The instrument this event concerns; empty for instrument-agnostic payloads such as {@link Command}. */
+    public Optional<InstrumentId> maybeInstrumentId() {
+        return Optional.ofNullable(instrumentId);
     }
 
     /**

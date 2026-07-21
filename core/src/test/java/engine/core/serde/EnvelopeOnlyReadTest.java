@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  * proving generic infrastructure (bus, archive, replay, metrics) never pays payload-parsing costs
  * or risks a payload it doesn't understand.
  */
-class EnvelopeOnlyReadTest {
+public class EnvelopeOnlyReadTest {
 
     private final EventCodec codec = new JsonEventCodec(PayloadRegistry.standard());
 
