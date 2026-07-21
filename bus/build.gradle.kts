@@ -40,3 +40,13 @@ testing {
         }
     }
 }
+
+// NEG-18 Step 7 throughput harness: a manual `main`, never wired into build/check/integrationTest.
+// Needs the docker-compose Redis. Run with: ./gradlew :bus:publishBench
+tasks.register<JavaExec>("publishBench") {
+    group = "verification"
+    description = "Runs the publish throughput bench against the docker-compose Redis (manual only)."
+    val integrationTest = sourceSets["integrationTest"]
+    classpath = integrationTest.runtimeClasspath
+    mainClass.set("engine.bus.PublishBench")
+}
