@@ -27,6 +27,7 @@ testing {
                 implementation(project())
                 implementation(libs.lettuce)
                 implementation(libs.assertj)
+                implementation(testFixtures(project(":core")))
             }
             targets.all {
                 testTask.configure {
