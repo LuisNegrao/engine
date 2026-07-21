@@ -1,5 +1,6 @@
 package engine.bus;
 
+import engine.core.bus.EventSelector;
 import engine.core.event.Bar;
 import engine.core.event.Command;
 import engine.core.event.Event;
@@ -54,6 +55,61 @@ public final class StreamNames {
             case Metric m -> "metrics";
             case Command c -> "commands";
         };
+    }
+
+    /**
+     * Resolves the single stream a subscriber's {@link EventSelector} maps to, per the ADR 0002 §3
+     * table. This is where "which payload types are instrument-partitioned" lives — {@code core}
+     * never knows, so the selector carries only a payload type (plus optional instrument/interval)
+     * and validation of what is mandatory happens here, at subscribe time.
+     *
+     * <p>Partitioned types ({@link TradeTick}, {@link QuoteTick}, {@link Bar}) require the selector's
+     * instrument; {@code Bar} additionally requires an interval in the ADR vocabulary. Single-stream
+     * types ignore instrument and interval entirely.
+     *
+     * @throws IllegalArgumentException if a partitioned type's selector has no instrument, a
+     *     {@code Bar} selector has no interval or one outside the ADR vocabulary, or the payload type
+     *     is not a known ADR 0002 §3 payload
+     */
+    public static String streamFor(EventSelector selector) {
+        Class<?> type = selector.payloadType();
+        if (type == TradeTick.class) {
+            return "md.tick.trade." + requireInstrument(selector);
+        } else if (type == QuoteTick.class) {
+            return "md.tick.quote." + requireInstrument(selector);
+        } else if (type == Bar.class) {
+            return "md.bar." + intervalToken(requireInterval(selector)) + "." + requireInstrument(selector);
+        } else if (type == Signal.class) {
+            return "signals";
+        } else if (type == OrderIntent.class) {
+            return "orders.intents";
+        } else if (type == Fill.class) {
+            return "orders.fills";
+        } else if (type == Metric.class) {
+            return "metrics";
+        } else if (type == Command.class) {
+            return "commands";
+        }
+        throw new IllegalArgumentException(
+                type.getSimpleName() + " is not a known ADR 0002 §3 payload type and has no stream");
+    }
+
+    /** The dead-letter stream that parks poison entries from {@code stream}, per ADR 0002 §3. */
+    public static String dlqFor(String stream) {
+        return "dlq." + stream;
+    }
+
+    private static String requireInstrument(EventSelector selector) {
+        return selector.maybeInstrumentId()
+                .map(InstrumentId::toString)
+                .orElseThrow(() -> new IllegalArgumentException("instrumentId is required to subscribe to "
+                        + selector.payloadType().getSimpleName() + " but the selector had none"));
+    }
+
+    private static Duration requireInterval(EventSelector selector) {
+        return selector.maybeBarInterval()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "barInterval is required to subscribe to Bar but the selector " + "had none"));
     }
 
     private static String requireInstrument(Event event) {

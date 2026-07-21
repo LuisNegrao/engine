@@ -4,9 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
+import engine.core.bus.EventSelector;
 import engine.core.event.Bar;
+import engine.core.event.Command;
 import engine.core.event.Event;
+import engine.core.event.Fill;
+import engine.core.event.Metric;
+import engine.core.event.OrderIntent;
 import engine.core.event.Payload;
+import engine.core.event.QuoteTick;
+import engine.core.event.Signal;
+import engine.core.event.TradeTick;
 import engine.core.serde.SampleEvents;
 import java.time.Duration;
 import java.util.Set;
@@ -92,6 +100,61 @@ class StreamNamesTest {
         assertThatThrownBy(() -> StreamNames.streamFor(event))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("PT1M30S");
+    }
+
+    /**
+     * Selector resolution mirrors the same ADR 0002 §3 table as {@link StreamNames#streamFor(Event)},
+     * with expected names hardcoded for the same anti-tautology reason. Every payload type appears.
+     */
+    static Stream<Arguments> adrSelectorTable() {
+        return Stream.of(
+                arguments(EventSelector.of(TradeTick.class, SampleEvents.BTC), "md.tick.trade.BTC-USDT.BINANCE"),
+                arguments(EventSelector.of(QuoteTick.class, SampleEvents.BTC), "md.tick.quote.BTC-USDT.BINANCE"),
+                arguments(EventSelector.bars(Duration.ofMinutes(1), SampleEvents.BTC), "md.bar.1m.BTC-USDT.BINANCE"),
+                arguments(EventSelector.of(Signal.class), "signals"),
+                arguments(EventSelector.of(OrderIntent.class), "orders.intents"),
+                arguments(EventSelector.of(Fill.class), "orders.fills"),
+                arguments(EventSelector.of(Metric.class), "metrics"),
+                arguments(EventSelector.of(Command.class), "commands"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("adrSelectorTable")
+    void selectorResolvesToTheAdrPrescribedStream(EventSelector selector, String expectedStream) {
+        assertThat(StreamNames.streamFor(selector)).isEqualTo(expectedStream);
+    }
+
+    @Test
+    void adrSelectorTableCoversEveryPayloadType() {
+        Set<Class<?>> covered = adrSelectorTable()
+                .map(args -> ((EventSelector) args.get()[0]).payloadType())
+                .collect(Collectors.toSet());
+        assertThat(covered).containsExactlyInAnyOrder(Payload.class.getPermittedSubclasses());
+    }
+
+    @Test
+    void partitionedSelectorWithoutInstrumentThrowsNamingTheType() {
+        assertThatThrownBy(() -> StreamNames.streamFor(EventSelector.of(TradeTick.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("TradeTick");
+    }
+
+    @Test
+    void barSelectorWithoutIntervalThrows() {
+        assertThatThrownBy(() -> StreamNames.streamFor(EventSelector.of(Bar.class, SampleEvents.BTC)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("barInterval");
+    }
+
+    @Test
+    void singleStreamSelectorIgnoresInstrument() {
+        assertThat(StreamNames.streamFor(EventSelector.of(Metric.class, SampleEvents.BTC)))
+                .isEqualTo("metrics");
+    }
+
+    @Test
+    void dlqForPrefixesTheStream() {
+        assertThat(StreamNames.dlqFor("orders.intents")).isEqualTo("dlq.orders.intents");
     }
 
     private static Bar barWith(Duration interval) {
