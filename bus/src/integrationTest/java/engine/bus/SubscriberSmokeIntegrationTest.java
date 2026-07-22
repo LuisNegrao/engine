@@ -101,6 +101,10 @@ class SubscriberSmokeIntegrationTest {
             }
             assertThat(reader.xpending(STREAM, GROUP).getCount()).isZero();
 
+            // Fully caught up: nothing undelivered (XINFO lag) and nothing pending (XPENDING).
+            assertThat(subscription.lag()).isZero();
+            assertThat(subscription.skipCount()).isZero();
+
             subscription.close();
         }
     }

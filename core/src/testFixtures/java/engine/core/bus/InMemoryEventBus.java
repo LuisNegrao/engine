@@ -165,6 +165,12 @@ public class InMemoryEventBus implements EventPublisher, EventSubscriber {
             return 0;
         }
 
+        /** Always {@code 0}: synchronous delivery never lags, so it never skips. */
+        @Override
+        public long skipCount() {
+            return 0;
+        }
+
         @Override
         public void close() {
             closed = true;

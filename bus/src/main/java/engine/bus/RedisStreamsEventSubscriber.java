@@ -4,6 +4,7 @@ import engine.core.bus.EventHandler;
 import engine.core.bus.EventSelector;
 import engine.core.bus.EventSubscriber;
 import engine.core.bus.SubscribeOptions;
+import engine.core.bus.SubscribeOptions.LagPolicy;
 import engine.core.bus.SubscribeOptions.SkipToLatest;
 import engine.core.bus.SubscribeOptions.StartPosition;
 import engine.core.bus.Subscription;
@@ -38,8 +39,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Redis Streams consumer-group implementation of {@link EventSubscriber}. Every subscription owns a
@@ -117,7 +120,7 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
 
         StatefulRedisConnection<String, byte[]> connection =
                 client.connect(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE));
-        RedisSubscription subscription = new RedisSubscription(connection, streams, handler);
+        RedisSubscription subscription = new RedisSubscription(connection, streams, handler, options.lagPolicy());
         subscriptions.add(subscription);
         subscription.start(subscriptionCount.incrementAndGet());
         return subscription;
@@ -162,7 +165,9 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
         private final RedisCommands<String, byte[]> commands;
         private final List<String> streams;
         private final EventHandler handler;
+        private final LagPolicy lagPolicy;
         private final Consumer<String> consumer;
+        private final AtomicLong skipCount = new AtomicLong();
         private volatile boolean running = true;
         private Thread thread;
         private long lastSweepNanos = System.nanoTime();
@@ -180,11 +185,15 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
         };
 
         RedisSubscription(
-                StatefulRedisConnection<String, byte[]> connection, List<String> streams, EventHandler handler) {
+                StatefulRedisConnection<String, byte[]> connection,
+                List<String> streams,
+                EventHandler handler,
+                LagPolicy lagPolicy) {
             this.connection = connection;
             this.commands = connection.sync();
             this.streams = streams;
             this.handler = handler;
+            this.lagPolicy = lagPolicy;
             this.consumer = Consumer.from(group, consumerName);
         }
 
@@ -325,6 +334,7 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
             lastSweepNanos = now;
             for (String stream : streams) {
                 claimSweep(stream);
+                maybeSkip(stream);
             }
         }
 
@@ -398,10 +408,96 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
             return streams.stream().map(s -> StreamOffset.from(s, id)).toArray(streamOffsetArray());
         }
 
+        /**
+         * If this subscription skips, and a stream's lag exceeds the threshold, jump the group's
+         * cursor to the tail and clear this consumer's own pending on the stream. Runs on the poll
+         * thread each claim interval.
+         */
+        private void maybeSkip(String stream) {
+            if (!(lagPolicy instanceof SkipToLatest skip)) {
+                return;
+            }
+            OptionalLong undelivered = undeliveredLag(commands, stream);
+            if (undelivered.isEmpty()) {
+                // Lag is unknown — trimming cut into the undelivered range and XINFO returned nil.
+                // Never skip on unknown data: skipping on a bad number is how order-of-magnitude
+                // mistakes happen. Wait for a real reading next interval.
+                return;
+            }
+            long streamLag = undelivered.getAsLong() + pendingCount(commands, stream);
+            if (streamLag <= skip.threshold()) {
+                return;
+            }
+            // SETID alone moves only the delivery cursor; entries already in our PEL would come back
+            // through the claim sweep. The skip must clear both, so ack our own pending too.
+            commands.xgroupSetid(StreamOffset.from(stream, "$"), group);
+            ackOwnPending(stream);
+            skipCount.incrementAndGet();
+            LOG.log(
+                    Level.WARNING,
+                    "SkipToLatest fired on " + stream + " group " + group + ": lag " + streamLag + " > "
+                            + skip.threshold() + ", skipped ~" + streamLag + " entries to the tail");
+        }
+
+        /** XACKs every entry still pending for this consumer on the stream, in batches. */
+        private void ackOwnPending(String stream) {
+            List<PendingMessage> mine;
+            do {
+                mine = commands.xpending(
+                        stream,
+                        new XPendingArgs<String>()
+                                .consumer(consumer)
+                                .range(Range.unbounded())
+                                .limit(Limit.from(tuning.batchCount())));
+                for (PendingMessage p : mine) {
+                    commands.xack(stream, group, p.getId());
+                    lastErrors.remove(p.getId());
+                }
+            } while (mine.size() == tuning.batchCount());
+        }
+
         @Override
         public long lag() {
-            // TODO(NEG-19 Step 6): real lag = XINFO GROUPS lag + XPENDING count, summed per stream.
-            return 0L;
+            // Runs on the control connection, not this subscription's, so a caller polling lag() never
+            // queues behind the poll thread's blocking XREADGROUP.
+            RedisCommands<String, byte[]> control = controlConnection.sync();
+            long total = 0;
+            for (String stream : streams) {
+                total += pendingCount(control, stream);
+                total += undeliveredLag(control, stream).orElse(0);
+            }
+            return total;
+        }
+
+        @Override
+        public long skipCount() {
+            return skipCount.get();
+        }
+
+        /** Delivered-but-unacked entries for the whole group on this stream. */
+        private long pendingCount(RedisCommands<String, byte[]> cmds, String stream) {
+            return cmds.xpending(stream, group).getCount();
+        }
+
+        /**
+         * Never-delivered entries for our group on this stream, from {@code XINFO GROUPS}, or empty
+         * when the {@code lag} field is nil — Redis reports nil once trimming has removed undelivered
+         * entries and it can no longer compute the count. Empty means "unknown", never "zero".
+         */
+        private OptionalLong undeliveredLag(RedisCommands<String, byte[]> cmds, String stream) {
+            for (Object entry : cmds.xinfoGroups(stream)) {
+                if (!(entry instanceof List<?> fields)) {
+                    continue;
+                }
+                Map<String, Object> info = asFieldMap(fields);
+                if (!group.equals(asString(info.get("name")))) {
+                    continue;
+                }
+                Object lag = info.get("lag");
+                return lag == null ? OptionalLong.empty() : OptionalLong.of(((Number) lag).longValue());
+            }
+            // No group row (e.g. empty stream just after MKSTREAM): nothing undelivered.
+            return OptionalLong.of(0);
         }
 
         @Override
@@ -433,5 +529,25 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
     @SuppressWarnings("unchecked")
     private static java.util.function.IntFunction<StreamOffset<String>[]> streamOffsetArray() {
         return size -> (StreamOffset<String>[]) new StreamOffset[size];
+    }
+
+    /** Folds an {@code XINFO GROUPS} group row (flat field/value list) into a map keyed by field name. */
+    private static Map<String, Object> asFieldMap(List<?> fields) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < fields.size(); i += 2) {
+            map.put(asString(fields.get(i)), fields.get(i + 1));
+        }
+        return map;
+    }
+
+    /** XINFO field names/values arrive as {@code byte[]} under the byte-array value codec. */
+    private static String asString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof byte[] bytes) {
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return value.toString();
     }
 }
