@@ -158,6 +158,20 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
         client.shutdown();
     }
 
+    /**
+     * Test-only {@code kill -9} stand-in: drop every connection and abandon the poll threads
+     * <em>without</em> the clean-close drain, so entries this consumer read but never acked stay in
+     * the group's pending list. A restart with the same consumer name must recover them via the
+     * startup PEL drain — the kill/restart acceptance test's whole point.
+     */
+    void killForTest() {
+        for (RedisSubscription subscription : subscriptions) {
+            subscription.killForTest();
+        }
+        controlConnection.close();
+        client.shutdown();
+    }
+
     /** A live subscription: one dedicated connection, one daemon poll thread, synchronous commands. */
     private final class RedisSubscription implements Subscription {
 
@@ -512,6 +526,17 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
                     Thread.currentThread().interrupt();
                 }
             }
+            connection.close();
+            subscriptions.remove(this);
+        }
+
+        /**
+         * Abandon like a killed process: stop the loop and drop the connection with no drain and no
+         * ack, leaving read-but-unacked entries in the PEL. The poll thread is deliberately not
+         * joined or interrupted — a real {@code kill -9} does not wait for anything.
+         */
+        void killForTest() {
+            running = false;
             connection.close();
             subscriptions.remove(this);
         }
