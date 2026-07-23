@@ -65,6 +65,11 @@ public class InMemoryEventBus implements EventPublisher, EventSubscriber {
         return subscription;
     }
 
+    @Override
+    public Replay replay(List<EventSelector> selectors, ReplayRange range, EventHandler handler) {
+        throw new UnsupportedOperationException("replay lands in NEG-20 step 2");
+    }
+
     /** Events that exhausted {@link #MAX_ATTEMPTS} handler attempts, in the order they gave up. */
     public List<DeadLetter> deadLetters() {
         return List.copyOf(deadLetters);

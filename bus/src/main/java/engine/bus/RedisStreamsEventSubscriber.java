@@ -3,6 +3,8 @@ package engine.bus;
 import engine.core.bus.EventHandler;
 import engine.core.bus.EventSelector;
 import engine.core.bus.EventSubscriber;
+import engine.core.bus.Replay;
+import engine.core.bus.ReplayRange;
 import engine.core.bus.SubscribeOptions;
 import engine.core.bus.SubscribeOptions.LagPolicy;
 import engine.core.bus.SubscribeOptions.SkipToLatest;
@@ -147,6 +149,11 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
             }
         }
         return streams;
+    }
+
+    @Override
+    public Replay replay(List<EventSelector> selectors, ReplayRange range, EventHandler handler) {
+        throw new UnsupportedOperationException("replay lands in NEG-20 step 4");
     }
 
     @Override

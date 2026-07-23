@@ -39,6 +39,9 @@ import java.util.List;
  *       dispatch after the in-flight event completes, within a bounded wait; {@link #close()} closes
  *       every subscription.
  * </ol>
+ *
+ * <p>Beyond live consumption, {@link #replay} re-drives a recorded range of the same streams through
+ * the same {@link EventHandler} path — see its contract below.
  */
 public interface EventSubscriber extends AutoCloseable {
 
@@ -49,6 +52,45 @@ public interface EventSubscriber extends AutoCloseable {
      * is already live.
      */
     Subscription subscribe(List<EventSelector> selectors, SubscribeOptions options, EventHandler handler);
+
+    /**
+     * Replays a bounded, recorded range of the streams carrying {@code selectors} through {@code
+     * handler} — the same handler type, the same selectors, the same delivery path as {@link
+     * #subscribe}, so a handler cannot tell replayed traffic from live. Returns a {@link Replay}
+     * already running on its own dedicated thread; block on {@link Replay#done()} for the
+     * end-of-range signal. Throws synchronously at wiring time on an invalid selector or an offset
+     * range that resolves to more than one stream (see the class contract), and throws {@link
+     * ReplayRetentionException} up front when the requested start is already below the retention
+     * floor.
+     *
+     * <p>The replay contract, distinct from live consumption:
+     *
+     * <ol>
+     *   <li><strong>Pure reader.</strong> A replay never writes to the bus: no consumer group, no
+     *       acknowledgements, no dead-lettering. Live consumption elsewhere is unaffected by any
+     *       number of concurrent replays.
+     *   <li><strong>Identical delivery.</strong> The same {@link EventHandler} type, invoked from a
+     *       single dedicated thread, never concurrently with itself; events carry their original
+     *       envelopes — same {@code eventId}, same {@code occurredAt}, nothing re-minted.
+     *   <li><strong>Positions are ingest-time.</strong> {@link ReplayPosition#at(java.time.Instant)}
+     *       addresses when the bus <em>received</em> events, at millisecond precision — within
+     *       publish latency of {@code occurredAt} in normal operation, arbitrarily far after a feed
+     *       outage. Delivered events are never filtered by {@code occurredAt}; event-time-exact or
+     *       beyond-retention replay belongs to the Historical Data Store (NEG-7).
+     *   <li><strong>Deterministic and bounded.</strong> Per-stream publish order, streams merged by
+     *       ingest position with a fixed tie-break, so an identical bounded replay over untrimmed
+     *       data yields the identical sequence. Handlers must not rely on cross-stream order — live
+     *       never honors it. {@link Replay#done()} completes with the delivered count at
+     *       end-of-range.
+     *   <li><strong>Fail-fast.</strong> A range the bus no longer holds throws {@link
+     *       ReplayRetentionException} up front, or completes {@link Replay#done()} exceptionally if
+     *       trimming overtakes a running replay — never silent partial data. A throwing handler or
+     *       undecodable entry aborts the replay, completing {@code done()} exceptionally with the
+     *       cause; {@link Replay#close()} before exhaustion completes it with a {@link
+     *       java.util.concurrent.CancellationException}.
+     * </ol>
+     */
+    Replay replay(List<EventSelector> selectors, ReplayRange range, EventHandler handler);
 
     /** Closes every open subscription and releases transport resources. */
     @Override
