@@ -19,8 +19,8 @@ What every component speaks: the event model, its wire codec, and the *contracts
 |---|---|
 | `engine.core.event` | The `Event` envelope, the sealed `Payload` hierarchy (8 types), and value types (`InstrumentId`, `Side`, …). Zero framework imports — plain records. Nullable components carry `maybeX()` Optional views. |
 | `engine.core.serde` | The wire format, behind the `EventCodec` interface (`PayloadRegistry`, `EnvelopeView`, `JsonEventCodec`). The **only** package allowed to import Jackson; swapping JSON for a binary codec touches only this package. |
-| `engine.core.bus` | Transport *contracts*: `EventPublisher`, and the consuming side `EventSubscriber` / `EventHandler` / `Subscription` plus the addressing/config types `EventSelector` and `SubscribeOptions` (`StartPosition`, sealed `LagPolicy`). Interfaces and value types only — components subscribe by payload type and instrument, never by stream name; no implementation against a real transport, ever. |
-| testFixtures | Shared test helpers published to other modules' test suites: `SampleEvents`, `InMemoryEventPublisher`, and `InMemoryEventBus` (publisher + subscriber in one, for exercising a component's full publish/subscribe surface with no Redis). Test doubles for core contracts live here, not in any module's main sources. |
+| `engine.core.bus` | Transport *contracts*: `EventPublisher`, and the consuming side `EventSubscriber` / `EventHandler` / `Subscription` plus the addressing/config types `EventSelector` and `SubscribeOptions` (`StartPosition`, sealed `LagPolicy`). The replay contract (NEG-20) lives here too: `EventSubscriber.replay`, the sealed `ReplayPosition` (`earliest`/`at`/`offset`), `ReplayRange`, the `Replay` handle (`done()` end-of-range signal), and `ReplayRetentionException`. Interfaces and value types only — components subscribe by payload type and instrument, never by stream name; no implementation against a real transport, ever. |
+| testFixtures | Shared test helpers published to other modules' test suites: `SampleEvents`, `InMemoryEventPublisher`, and `InMemoryEventBus` (publisher + subscriber in one, for exercising a component's full publish/subscribe surface with no Redis; records every published event and implements `replay` synchronously so a component can re-drive its own history). Test doubles for core contracts live here, not in any module's main sources. |
 
 **Belongs in core:** types all components need; interfaces that keep infrastructure swappable; pure domain values; invariant checks on those values.
 
@@ -39,6 +39,8 @@ The one place that knows events travel over Redis. It implements core's messagin
 | `RedisStreamsEventSubscriber` (NEG-19) | Consumer-group subscribe with at-least-once delivery: dedicated connection + poll thread per subscription, startup PEL drain, `XACK`-after-handler, the claim sweep (crash-takeover and handler-retry as one mechanism), lag observation and `md.*`-only skip-to-latest. |
 | `SubscriberTuning` (NEG-19) | Block/batch/claim-interval/claim-min-idle/max-deliveries/DLQ-cap knobs; `standard()` is production, tests shrink the timings. |
 | `DeadLetter` (NEG-19) | The `dlq.<stream>` parking mechanics and frozen DLQ field constants (ADR 0002 §3). |
+| `RedisReplay` (NEG-20) | Pure-reader replay of a bounded stream-ID range: dedicated connection + daemon thread per replay, batched `XRANGE`, k-way merge by stream ID (tie-broken by name), retention guard on the oldest retained id, `done()` completion on every exit path. Never writes to Redis — no group, no ack, no DLQ. |
+| `ReplayPositions` (NEG-20) | Pure `ReplayPosition` → Redis stream-ID mapping and validation (offset-token shape, single-stream rule). |
 
 Its `integrationTest` suite runs against the docker-compose Redis and is deliberately excluded from plain `build`.
 
