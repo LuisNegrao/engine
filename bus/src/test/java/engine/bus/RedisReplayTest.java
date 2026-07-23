@@ -20,9 +20,14 @@ class RedisReplayTest {
     private static final ReplayPosition EARLIEST = ReplayPosition.earliest();
     private static final ReplayPosition AT = ReplayPosition.at(Instant.parse("2026-07-10T14:03:22.145Z"));
 
-    /** An XINFO map with a trim floor at {@code max-deleted-entry-id} and an oldest surviving entry. */
-    private static Map<String, Object> xinfo(String maxDeleted, String firstEntryId) {
-        return Map.of("max-deleted-entry-id", maxDeleted, "first-entry", List.of(firstEntryId, List.of()));
+    /** An XINFO map whose oldest retained entry ({@code first-entry}) is the trim floor. */
+    private static Map<String, Object> xinfo(String oldestRetainedId) {
+        return Map.of("first-entry", List.of(oldestRetainedId, List.of()));
+    }
+
+    /** An XINFO map for an existing but empty stream — no {@code first-entry}. */
+    private static Map<String, Object> emptyStreamXinfo() {
+        return Map.of("length", "0");
     }
 
     @Test
@@ -41,38 +46,37 @@ class RedisReplayTest {
 
     @Test
     void earliestIsExemptEvenWhenEntriesHaveBeenTrimmed() {
-        // "oldest retained" is what earliest() means, so a trim floor never rejects it.
-        assertThat(RedisReplay.includesAtStart("signals", EARLIEST, "0-0", xinfo("500-0", "501-0")))
+        // "oldest retained" is what earliest() means, so the trim floor never rejects it.
+        assertThat(RedisReplay.includesAtStart("signals", EARLIEST, "0-0", xinfo("501-0")))
                 .isTrue();
     }
 
     @Test
-    void timestampedStartAboveTheTrimFloorIsAdmitted() {
-        assertThat(RedisReplay.includesAtStart("signals", AT, "600-0", xinfo("500-0", "501-0")))
+    void timestampedStartAboveTheOldestRetainedIsAdmitted() {
+        assertThat(RedisReplay.includesAtStart("signals", AT, "600-0", xinfo("501-0")))
                 .isTrue();
     }
 
     @Test
-    void timestampedStartBelowTheTrimFloorFailsLoudly() {
-        assertThatThrownBy(() -> RedisReplay.includesAtStart("signals", AT, "400-0", xinfo("500-0", "501-0")))
+    void timestampedStartExactlyOnTheOldestRetainedIsAdmitted() {
+        // The oldest retained id is a surviving entry, so a start equal to it is in-range (inclusive).
+        assertThat(RedisReplay.includesAtStart("signals", AT, "501-0", xinfo("501-0")))
+                .isTrue();
+    }
+
+    @Test
+    void timestampedStartBelowTheOldestRetainedFailsLoudly() {
+        assertThatThrownBy(() -> RedisReplay.includesAtStart("signals", AT, "400-0", xinfo("501-0")))
                 .isInstanceOf(ReplayRetentionException.class)
                 .hasMessageContaining("signals")
                 .hasMessageContaining("400-0") // requested start
-                .hasMessageContaining("500-0") // trim floor
-                .hasMessageContaining("501-0"); // oldest surviving id
+                .hasMessageContaining("501-0"); // oldest retained id
     }
 
     @Test
-    void startExactlyOnTheTrimFloorFailsLoudly() {
-        // The floor id is the highest id already deleted, so a start equal to it is gone too (≤).
-        assertThatThrownBy(() -> RedisReplay.includesAtStart("signals", AT, "500-0", xinfo("500-0", "501-0")))
-                .isInstanceOf(ReplayRetentionException.class);
-    }
-
-    @Test
-    void anUntrimmedStreamAdmitsAnyStart() {
-        // max-deleted-entry-id "0-0" means nothing has ever been trimmed.
-        assertThat(RedisReplay.includesAtStart("signals", AT, "1-0", xinfo("0-0", "1-0")))
-                .isTrue();
+    void timestampedStartOnAnEmptyStreamFailsLoudly() {
+        assertThatThrownBy(() -> RedisReplay.includesAtStart("signals", AT, "1-0", emptyStreamXinfo()))
+                .isInstanceOf(ReplayRetentionException.class)
+                .hasMessageContaining("empty");
     }
 }

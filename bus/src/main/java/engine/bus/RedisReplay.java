@@ -212,14 +212,17 @@ final class RedisReplay implements Replay {
 
     /**
      * Pure start-retention decision from a stream's {@code XINFO STREAM} field map ({@code null} =
-     * missing stream). {@code max-deleted-entry-id} is the only honest trim signal — the first-entry
-     * ID cannot tell "trimmed away" from "never existed" — so an {@code earliest()} start is exempt by
-     * definition (it <em>means</em> oldest retained) while a start at or below the trim floor fails
-     * loudly.
+     * missing stream). The trim floor is the <em>oldest retained</em> entry id ({@code first-entry}),
+     * not {@code max-deleted-entry-id}: this system trims with {@code XTRIM MINID}/{@code MAXLEN},
+     * which never move {@code max-deleted-entry-id} (only {@code XDEL} does), so the oldest surviving
+     * id is the signal that actually tracks trimming. An {@code earliest()} start is exempt — it
+     * <em>means</em> "oldest retained" — while a timestamped or offset start below the oldest retained
+     * id fails loudly. The residual ambiguity (an id below the oldest could have been trimmed away or
+     * never populated) resolves to fail-loud, honoring "never silent partial data".
      *
      * @return whether the stream contributes events to the replay
-     * @throws ReplayRetentionException if the requested start lies at or below the trim floor, or the
-     *     stream is missing for a timestamped/offset start
+     * @throws ReplayRetentionException if the requested start lies below the oldest retained id, or the
+     *     stream is missing or empty for a timestamped/offset start
      */
     static boolean includesAtStart(String stream, ReplayPosition start, String startId, Map<String, Object> xinfo) {
         boolean earliest = start instanceof ReplayPosition.Earliest;
@@ -233,11 +236,11 @@ final class RedisReplay implements Replay {
         if (earliest) {
             return true;
         }
-        String maxDeleted = asString(xinfo.get("max-deleted-entry-id"));
-        if (maxDeleted != null && compareIds(startId, maxDeleted) <= 0) {
+        String oldest = oldestRetainedId(xinfo);
+        if (oldest == null || compareIds(startId, oldest) < 0) {
             throw new ReplayRetentionException("replay of " + stream + " starts at " + startId
-                    + " but entries up to " + maxDeleted + " have been trimmed (oldest surviving id "
-                    + firstEntryId(xinfo) + ")");
+                    + " but the oldest retained entry is " + (oldest == null ? "none (stream empty)" : oldest)
+                    + " — the requested range is no longer retained");
         }
         return true;
     }
@@ -254,16 +257,12 @@ final class RedisReplay implements Replay {
         }
     }
 
-    private static String maxDeletedEntryId(Map<String, Object> xinfo) {
-        String value = asString(xinfo.get("max-deleted-entry-id"));
-        return value == null ? "0-0" : value;
-    }
-
-    private static String firstEntryId(Map<String, Object> xinfo) {
+    /** The oldest retained entry id ({@code first-entry}), or {@code null} for an empty stream. */
+    private static String oldestRetainedId(Map<String, Object> xinfo) {
         if (xinfo.get("first-entry") instanceof List<?> pair && !pair.isEmpty()) {
             return asString(pair.get(0));
         }
-        return "none";
+        return null;
     }
 
     /** Folds a flat {@code XINFO} field/value list into a map keyed by field name. */
@@ -325,8 +324,8 @@ final class RedisReplay implements Replay {
          * redelivered. An empty batch means the stream is exhausted within the range.
          *
          * <p>After the read — never before, so a trim can't invalidate entries already fetched — the
-         * per-batch retention check re-reads {@code max-deleted-entry-id}: if trimming has advanced
-         * past the cursor while the replay was running, entries between the cursor and this batch were
+         * per-batch retention check re-reads the oldest retained id: if trimming has advanced it past
+         * the cursor while the replay was running, entries between the cursor and this batch were
          * deleted, so the replay aborts rather than delivering across the hole.
          */
         void refill(RedisCommands<String, byte[]> cmds, int batchCount) {
@@ -342,10 +341,10 @@ final class RedisReplay implements Replay {
                 throw new ReplayRetentionException(
                         "replay of " + stream + " aborted: the stream was deleted while the replay was running");
             }
-            if (!isFirstRead && compareIds(maxDeletedEntryId(info), cursor) > 0) {
+            String oldest = oldestRetainedId(info);
+            if (!isFirstRead && oldest != null && compareIds(oldest, cursor) > 0) {
                 throw new ReplayRetentionException("replay of " + stream + " aborted: entries were trimmed past cursor "
-                        + cursor + " (max-deleted-entry-id " + maxDeletedEntryId(info)
-                        + ") while the replay was running");
+                        + cursor + " (oldest retained is now " + oldest + ") while the replay was running");
             }
 
             if (batch.isEmpty()) {
