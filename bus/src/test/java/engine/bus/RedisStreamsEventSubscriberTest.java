@@ -67,4 +67,21 @@ class RedisStreamsEventSubscriberTest {
 
         assertThat(streams).containsExactly("md.tick.trade.BTC-USDT.BINANCE");
     }
+
+    @Test
+    void resolveReplayStreamsMapsSelectorsToDistinctStreams() {
+        List<String> streams = RedisStreamsEventSubscriber.resolveReplayStreams(
+                List.of(EventSelector.of(TradeTick.class, SampleEvents.BTC), EventSelector.of(OrderIntent.class)));
+
+        assertThat(streams).containsExactly("md.tick.trade.BTC-USDT.BINANCE", "orders.intents");
+    }
+
+    @Test
+    void resolveReplayStreamsRejectsInvalidSelector() {
+        // A partitioned type with no instrument fails at wiring time, exactly as on the subscribe path.
+        assertThatThrownBy(() ->
+                        RedisStreamsEventSubscriber.resolveReplayStreams(List.of(EventSelector.of(TradeTick.class))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("TradeTick");
+    }
 }

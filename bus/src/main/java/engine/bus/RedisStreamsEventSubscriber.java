@@ -74,6 +74,8 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
     private final SubscriberTuning tuning;
     private final List<RedisSubscription> subscriptions = new CopyOnWriteArrayList<>();
     private final AtomicInteger subscriptionCount = new AtomicInteger();
+    private final List<RedisReplay> replays = new CopyOnWriteArrayList<>();
+    private final AtomicInteger replayCount = new AtomicInteger();
 
     public RedisStreamsEventSubscriber(
             String redisUri, EventCodec codec, String group, String consumerName, SubscriberTuning tuning) {
@@ -153,11 +155,49 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
 
     @Override
     public Replay replay(List<EventSelector> selectors, ReplayRange range, EventHandler handler) {
-        throw new UnsupportedOperationException("replay lands in NEG-20 step 4");
+        java.util.Objects.requireNonNull(range, "range must not be null");
+        java.util.Objects.requireNonNull(handler, "handler must not be null");
+        if (selectors == null || selectors.isEmpty()) {
+            throw new IllegalArgumentException("at least one selector is required");
+        }
+        // Wiring-time validation on the caller's thread, before any thread or connection is opened: a
+        // bad selector, an offset range over more than one stream, or a malformed offset token all
+        // throw here rather than surfacing asynchronously on done().
+        List<String> streams = resolveReplayStreams(selectors);
+        ReplayPositions.requireSingleStreamForOffset(range, streams);
+        ReplayPositions.startId(range.start());
+        ReplayPositions.endId(range.maybeEnd().orElse(null), "0-0"); // validates a malformed offset end
+
+        RedisReplay replay = new RedisReplay(
+                client,
+                codec,
+                streams,
+                range,
+                handler,
+                tuning.batchCount(),
+                replayCount.incrementAndGet(),
+                replays::remove);
+        replays.add(replay);
+        replay.start();
+        return replay;
+    }
+
+    /**
+     * Resolves selectors to the distinct list of streams a replay reads. Like {@link #resolveStreams}
+     * but with no lag-policy check — a pure reader never skips, so {@code SkipToLatest} has no
+     * referent here. Pure and package-private for unit testing without Redis.
+     *
+     * @throws IllegalArgumentException on an invalid selector (via {@link StreamNames#streamFor})
+     */
+    static List<String> resolveReplayStreams(List<EventSelector> selectors) {
+        return selectors.stream().map(StreamNames::streamFor).distinct().toList();
     }
 
     @Override
     public void close() {
+        for (RedisReplay replay : replays) {
+            replay.close();
+        }
         for (RedisSubscription subscription : subscriptions) {
             subscription.close();
         }
@@ -281,7 +321,7 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
             byte[] bytes = message.getBody().get(RedisStreamsEventPublisher.EVENT_FIELD);
             Event event;
             try {
-                Optional<Event> decoded = bytes == null ? Optional.empty() : codec.decode(bytes);
+                Optional<Event> decoded = decodeEntry(codec, message);
                 if (decoded.isEmpty()) {
                     return parkUndecodable(
                             message,
@@ -556,6 +596,19 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
                 running = false;
             }
         }
+    }
+
+    /**
+     * The single entry→{@link Event} decode path, shared verbatim by live {@link
+     * RedisSubscription#dispatch} and {@link RedisReplay}. Reads the event bytes from {@code
+     * RedisStreamsEventPublisher.EVENT_FIELD} and decodes them; empty when the entry has no event
+     * field or its {@code eventType} is unknown, and it throws (via the codec) on corrupt bytes.
+     * Making the decode one method makes "the replay handler path is byte-identical to live" true by
+     * construction.
+     */
+    static Optional<Event> decodeEntry(EventCodec codec, StreamMessage<String, byte[]> message) {
+        byte[] bytes = message.getBody().get(RedisStreamsEventPublisher.EVENT_FIELD);
+        return bytes == null ? Optional.empty() : codec.decode(bytes);
     }
 
     @SuppressWarnings("unchecked")
