@@ -165,13 +165,18 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
         // throw here rather than surfacing asynchronously on done().
         List<String> streams = resolveReplayStreams(selectors);
         ReplayPositions.requireSingleStreamForOffset(range, streams);
-        ReplayPositions.startId(range.start());
+        String startId = ReplayPositions.startId(range.start());
         ReplayPositions.endId(range.maybeEnd().orElse(null), "0-0"); // validates a malformed offset end
+
+        // Retention guard on the caller's thread, before any thread is started: a timestamped or offset
+        // start the bus no longer holds throws ReplayRetentionException here, so the handler sees zero
+        // events. An earliest() start simply drops any stream that does not exist yet.
+        List<String> live = RedisReplay.liveStreamsAtStart(controlConnection.sync(), streams, range.start(), startId);
 
         RedisReplay replay = new RedisReplay(
                 client,
                 codec,
-                streams,
+                live,
                 range,
                 handler,
                 tuning.batchCount(),
