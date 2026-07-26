@@ -59,8 +59,8 @@ class BusMonitorEmissionTest {
         assertThat(value(events, "bus.stream.oldestAgeSeconds.metrics", "bus")).isEqualByComparingTo("45");
         assertThat(value(events, "bus.stream.rate.metrics", "bus")).isEqualByComparingTo("10"); // (250-100)/15s
 
-        // Per-group (owner is the consumer group).
-        assertThat(value(events, "bus.group.lag.metrics", "archiver")).isEqualByComparingTo("7");
+        // Per-group (owner is the consumer group): lag is undelivered(7) + pending(3), pending separate.
+        assertThat(value(events, "bus.group.lag.metrics", "archiver")).isEqualByComparingTo("10");
         assertThat(value(events, "bus.group.pending.metrics", "archiver")).isEqualByComparingTo("3");
         assertThat(value(events, "bus.group.lagUnknown.orders.intents", "risk-manager"))
                 .isEqualByComparingTo("1");

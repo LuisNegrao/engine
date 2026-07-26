@@ -312,8 +312,16 @@ public final class BusMonitor implements AutoCloseable {
 
         for (GroupReading g : current.groups()) {
             if (g.lag().isPresent()) {
+                // lag = undelivered + pending, the same total Subscription.lag() reports (plan lag
+                // semantics). pending is emitted separately so a stuck handler (high pending, low
+                // undelivered) reads differently from a slow one (high undelivered, low pending).
                 events.add(metric(
-                        MetricNames.groupLag(g.stream()), g.lag().getAsLong(), g.group(), monitorSource, at, clock));
+                        MetricNames.groupLag(g.stream()),
+                        g.lag().getAsLong() + g.pending(),
+                        g.group(),
+                        monitorSource,
+                        at,
+                        clock));
             } else {
                 events.add(metric(MetricNames.groupLagUnknown(g.stream()), 1L, g.group(), monitorSource, at, clock));
             }
