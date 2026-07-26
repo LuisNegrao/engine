@@ -17,19 +17,24 @@ import java.util.OptionalLong;
  * BusMonitor#ratePerSecond}).
  *
  * @param takenAt when this sweep began, from the monitor's injected clock
+ * @param sweepMillis how long the sweep's Redis reads took — the {@code bus.monitor.sweepMillis}
+ *     watch-the-watcher metric
  * @param streams per live stream: {@code entries-added}, length, and oldest-entry age input
  * @param groups per (group, stream): lag (empty when Redis reports it nil) and pending
  * @param dlqs per discovered {@code dlq.*}: depth and the newest parked entry's fields
  * @param memory Redis {@code used_memory} and {@code maxmemory} ({@code 0} = unlimited)
  * @param publisher the publisher counters and per-source latency samples drained this sweep
+ * @param publisherInFlight the publisher's in-flight gauge sampled at sweep time (not drained)
  */
 public record BusSnapshot(
         Instant takenAt,
+        long sweepMillis,
         List<StreamReading> streams,
         List<GroupReading> groups,
         List<DlqReading> dlqs,
         MemoryReading memory,
-        PublisherStats.Drain publisher) {
+        PublisherStats.Drain publisher,
+        long publisherInFlight) {
 
     public BusSnapshot {
         streams = List.copyOf(streams);
