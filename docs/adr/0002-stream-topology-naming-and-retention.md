@@ -176,8 +176,14 @@ Three layers, from contract to backstop:
 | `signals` | 14d | 500,000 | ≥14d of signals |
 | `orders.intents` | 30d | 1,000,000 | ≥30d of intents |
 | `orders.fills` | 30d | 1,000,000 | ≥30d of fills |
-| `metrics` | 48h | 2,000,000 | ≥48h of metrics |
+| `metrics` | 24h | 2,000,000 | ≥24h of metrics |
 | `commands` | 30d | 100,000 | ≥30d of commands |
+
+The `metrics` window is **24h** (was 48h): NEG-21's monitor emits ~300 Metric
+events/sweep at 15s over the initial ~45-stream universe (~20 events/s), so the
+unchanged 2M cap fills in ~28h — under 48h. The archiver puts every metric in
+QuestDB within seconds (fidelity preserved forever), so only the bus shock-absorber
+window shrinks; see ADR 0003.
 
 Windows are per-class configuration, not architecture: revising them (e.g. after a
 RAM upgrade) amends this table and a config value, nothing more. Order/command
