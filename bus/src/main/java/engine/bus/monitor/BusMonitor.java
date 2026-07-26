@@ -82,6 +82,7 @@ public final class BusMonitor implements AutoCloseable {
     private final MonitorTuning tuning;
     private final Clock clock;
     private final ScheduledExecutorService scheduler;
+    private final MetricsEndpoint endpoint;
     private final AtomicBoolean started = new AtomicBoolean();
 
     /** The last completed sweep — the rate baseline for the next sweep and what the endpoint renders. */
@@ -106,6 +107,7 @@ public final class BusMonitor implements AutoCloseable {
             thread.setDaemon(true);
             return thread;
         });
+        this.endpoint = new MetricsEndpoint(tuning.endpointPort());
     }
 
     /**
@@ -123,12 +125,18 @@ public final class BusMonitor implements AutoCloseable {
                 .build();
     }
 
-    /** Starts the sweep schedule; the first sweep runs immediately. */
+    /** Starts the metrics endpoint and the sweep schedule; the first sweep runs immediately. */
     public void start() {
         if (!started.compareAndSet(false, true)) {
             throw new IllegalStateException("monitor already started");
         }
+        endpoint.start();
         scheduler.scheduleWithFixedDelay(this::runSafely, 0, tuning.interval().toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** The metrics endpoint's actually-bound port — the real port when configured with {@code 0}. */
+    public int endpointPort() {
+        return endpoint.boundPort();
     }
 
     private void runSafely() {
@@ -147,7 +155,8 @@ public final class BusMonitor implements AutoCloseable {
      */
     void runOnce() {
         BusSnapshot current = sweep();
-        for (Event event : toEvents(lastSnapshot, current, MONITOR_SOURCE, clock)) {
+        List<Event> events = toEvents(lastSnapshot, current, MONITOR_SOURCE, clock);
+        for (Event event : events) {
             publisher.publish(event).whenComplete((v, err) -> {
                 if (err != null) {
                     // The failure also increments the publisher's own `failed` counter, which the next
@@ -156,6 +165,7 @@ public final class BusMonitor implements AutoCloseable {
                 }
             });
         }
+        endpoint.update(events, current.dlqs());
         lastSnapshot = current;
     }
 
@@ -164,10 +174,11 @@ public final class BusMonitor implements AutoCloseable {
         return lastSnapshot;
     }
 
-    /** Stops the scheduler, then releases the monitor's dedicated connection and client. */
+    /** Stops the scheduler and endpoint, then releases the monitor's dedicated connection and client. */
     @Override
     public void close() {
         scheduler.shutdownNow();
+        endpoint.close();
         connection.close();
         client.shutdown();
     }
