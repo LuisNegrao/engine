@@ -17,7 +17,6 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class RedisStreamsEventPublisher implements EventPublisher {
 
@@ -30,7 +29,7 @@ public class RedisStreamsEventPublisher implements EventPublisher {
     private final RedisClient client;
     private final StatefulRedisConnection<String, byte[]> connection;
     private final RedisAsyncCommands<String, byte[]> commands;
-    private final AtomicLong inFlight = new AtomicLong();
+    private final PublisherStats stats = new PublisherStats();
     private final RetentionPolicy retentionPolicy;
     private final EventCodec codec;
 
@@ -65,27 +64,49 @@ public class RedisStreamsEventPublisher implements EventPublisher {
                     .approximateTrimming();
             Map<String, byte[]> body = Map.of(EVENT_FIELD, codec.encode(event));
 
-            inFlight.incrementAndGet();
+            long latencyMillis =
+                    Duration.between(event.occurredAt(), event.ingestedAt()).toMillis();
+
+            stats.incrementInFlight();
             try {
                 // Every increment has exactly one decrement: whenComplete on the normal path,
-                // or this catch if xadd throws synchronously before returning a future.
+                // or this catch if xadd throws synchronously before returning a future. The
+                // published/failed counters ride the same two hooks.
                 return commands.xadd(stream, args, body)
-                        .whenComplete((id, err) -> inFlight.decrementAndGet())
+                        .whenComplete((id, err) -> {
+                            stats.decrementInFlight();
+                            if (err == null) {
+                                stats.recordLatency(event.source(), latencyMillis);
+                                stats.incrementPublished();
+                            } else {
+                                // A failed future — rejected while disconnected, timed out, or an
+                                // OOM XADD (the memory-wall tripwire, ADR 0002 §4).
+                                stats.incrementFailed();
+                            }
+                        })
                         .thenAccept(id -> {});
             } catch (RuntimeException e) {
-                inFlight.decrementAndGet();
+                stats.decrementInFlight();
+                stats.incrementFailed();
                 throw e;
             }
         } catch (RuntimeException e) {
+            // Pre-transport failure (bad routing, encode error): a data/programming bug, distinct
+            // from the operational publish failures `failed` exists to watch — left uncounted.
             return CompletableFuture.failedStage(e);
         }
+    }
+
+    /** Publish-path instrumentation, read each sweep by {@link engine.bus.monitor.BusMonitor}. */
+    public PublisherStats stats() {
+        return stats;
     }
 
     @Override
     public void close() {
         // Contract: bounded drain of in-flight publishes, then transport teardown.
         long deadlineNanos = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (inFlight.get() > 0 && System.nanoTime() < deadlineNanos) {
+        while (stats.inFlight() > 0 && System.nanoTime() < deadlineNanos) {
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {

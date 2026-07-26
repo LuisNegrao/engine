@@ -555,8 +555,8 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
                 if (!(entry instanceof List<?> fields)) {
                     continue;
                 }
-                Map<String, Object> info = asFieldMap(fields);
-                if (!group.equals(asString(info.get("name")))) {
+                Map<String, Object> info = XInfoReplies.asFieldMap(fields);
+                if (!group.equals(XInfoReplies.asString(info.get("name")))) {
                     continue;
                 }
                 Object lag = info.get("lag");
@@ -619,25 +619,5 @@ public class RedisStreamsEventSubscriber implements EventSubscriber {
     @SuppressWarnings("unchecked")
     private static java.util.function.IntFunction<StreamOffset<String>[]> streamOffsetArray() {
         return size -> (StreamOffset<String>[]) new StreamOffset[size];
-    }
-
-    /** Folds an {@code XINFO GROUPS} group row (flat field/value list) into a map keyed by field name. */
-    private static Map<String, Object> asFieldMap(List<?> fields) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (int i = 0; i + 1 < fields.size(); i += 2) {
-            map.put(asString(fields.get(i)), fields.get(i + 1));
-        }
-        return map;
-    }
-
-    /** XINFO field names/values arrive as {@code byte[]} under the byte-array value codec. */
-    private static String asString(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof byte[] bytes) {
-            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-        }
-        return value.toString();
     }
 }

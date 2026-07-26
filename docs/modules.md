@@ -41,6 +41,20 @@ The one place that knows events travel over Redis. It implements core's messagin
 | `DeadLetter` (NEG-19) | The `dlq.<stream>` parking mechanics and frozen DLQ field constants (ADR 0002 §3). |
 | `RedisReplay` (NEG-20) | Pure-reader replay of a bounded stream-ID range: dedicated connection + daemon thread per replay, batched `XRANGE`, k-way merge by stream ID (tie-broken by name), retention guard on the oldest retained id, `done()` completion on every exit path. Never writes to Redis — no group, no ack, no DLQ. |
 | `ReplayPositions` (NEG-20) | Pure `ReplayPosition` → Redis stream-ID mapping and validation (offset-token shape, single-stream rule). |
+| `PublisherStats` (NEG-21) | Always-on publish-path instrumentation owned by the publisher: `published`/`failed` interval counters, the `inFlight` gauge, and an exact per-source feed-latency buffer with a lossless double-buffer `drain()`. In the root, not `monitor`, because it is written on the hot path beside `inFlight` — moving it under `monitor` would make the publisher import monitoring code and invert the one-way arrow. |
+| `XInfoReplies` (NEG-21) | Shared folding of Redis `XINFO` replies (`asFieldMap`/`asString`), used by the subscriber, replay, and monitor. Root infrastructure with three consumers, not monitoring; `public` (not package-private) precisely so `engine.bus.monitor` can see it across the subpackage boundary. |
+
+### `engine.bus.monitor` — bus self-observability (NEG-21)
+
+Five classes that read the bus's health and publish it as ordinary `Metric` events through the core `EventPublisher` (the bus reports on itself over itself). This subpackage's boundary is **organizational, not architectural**: the dependency arrow points `engine.bus.monitor → engine.bus` and never back, and nothing on the publish/subscribe delivery path imports it. The litmus tests below do **not** distinguish a monitor from the subscriber — `BusMonitor` is as Redis-specific as `RedisStreamsEventSubscriber`; both are `bus`. The subpackage exists only to make the one-way dependency enforceable that a flat package could merely assert in a comment.
+
+| Class (NEG-21) | Responsibility |
+|---|---|
+| `MetricNames` | The ADR 0003 metric-name grammar as code: typed builders (`streamRate`, `groupLag`, `feedLatency`, …) and the frozen `LatencyPercentile` vocabulary, so no caller assembles a metric name by concatenation. |
+| `BusSnapshot` | One sweep's readings as an immutable value type (streams, groups, DLQs, memory, publisher drain, in-flight, sweep duration). Pure data — no Redis type leaks in, so it is fabricable in a unit test. |
+| `BusMonitor` | The scheduler (single daemon thread, sweep survives its own exceptions) on its own connection: `SCAN … TYPE stream` discovery, per-stream/group/DLQ/memory reads, and emission of one `Metric` per inventory row via the injected publisher. A pure reader — no group, no ack, no write to any observed stream. |
+| `MonitorTuning` | Sweep interval and endpoint port; `standard()` is 15 s / 9464. The percentile set is not tunable — ADR 0003 froze it. |
+| `MetricsEndpoint` | The interim Grafana-readable surface: a JDK `HttpServer` serving `GET /metrics` in Prometheus text (ADR 0003 §3 name derivation, spec-compliant label escaping, `bus_dlq_last_error` info-metric). A scrape reads a volatile reference and issues no Redis command. |
 
 Its `integrationTest` suite runs against the docker-compose Redis and is deliberately excluded from plain `build`.
 

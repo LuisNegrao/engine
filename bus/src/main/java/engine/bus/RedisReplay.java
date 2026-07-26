@@ -17,11 +17,9 @@ import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.lettuce.core.codec.RedisCodec;
 import io.lettuce.core.codec.StringCodec;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -248,7 +246,7 @@ final class RedisReplay implements Replay {
     /** Reads a stream's {@code XINFO STREAM} into a field map, or {@code null} if the key does not exist. */
     private static Map<String, Object> streamInfoOrNull(RedisCommands<String, byte[]> cmds, String stream) {
         try {
-            return foldFields(cmds.xinfoStream(stream));
+            return XInfoReplies.asFieldMap(cmds.xinfoStream(stream));
         } catch (RedisCommandExecutionException e) {
             if (e.getMessage() != null && e.getMessage().toLowerCase().contains("no such key")) {
                 return null;
@@ -260,29 +258,9 @@ final class RedisReplay implements Replay {
     /** The oldest retained entry id ({@code first-entry}), or {@code null} for an empty stream. */
     private static String oldestRetainedId(Map<String, Object> xinfo) {
         if (xinfo.get("first-entry") instanceof List<?> pair && !pair.isEmpty()) {
-            return asString(pair.get(0));
+            return XInfoReplies.asString(pair.get(0));
         }
         return null;
-    }
-
-    /** Folds a flat {@code XINFO} field/value list into a map keyed by field name. */
-    private static Map<String, Object> foldFields(List<?> fields) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (int i = 0; i + 1 < fields.size(); i += 2) {
-            map.put(asString(fields.get(i)), fields.get(i + 1));
-        }
-        return map;
-    }
-
-    /** {@code XINFO} field names and values arrive as {@code byte[]} under the byte-array value codec. */
-    private static String asString(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof byte[] bytes) {
-            return new String(bytes, StandardCharsets.UTF_8);
-        }
-        return value.toString();
     }
 
     /** Compares two {@code ms-seq} stream IDs numerically — lexical order would rank {@code 10-0} below {@code 9-0}. */
