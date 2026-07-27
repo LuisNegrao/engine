@@ -50,3 +50,21 @@ tasks.register<JavaExec>("publishBench") {
     classpath = integrationTest.runtimeClasspath
     mainClass.set("engine.bus.PublishBench")
 }
+
+// NEG-22 end-to-end smoke/soak harness: a manual `main`, never wired into build/check/integrationTest.
+// Needs the docker-compose Redis, and must not run concurrently with :bus:integrationTest.
+// Run with: ./gradlew :bus:e2eBench [--args='--soak --write-baseline']
+tasks.register<JavaExec>("e2eBench") {
+    group = "verification"
+    description = "Runs the end-to-end throughput/latency harness against the docker-compose Redis (manual only)."
+    val integrationTest = sourceSets["integrationTest"]
+    classpath = integrationTest.runtimeClasspath
+    mainClass.set("engine.bus.bench.EndToEndBench")
+    // 3 groups x 18M soak samples x 8 B is ~432 MB of preallocated latency arrays.
+    jvmArgs("-Xmx2g")
+    // Measure on the JDK the modules compile against, not on whatever JVM runs Gradle — the
+    // baseline records this version, so it has to be the one the engine actually runs on.
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+    // So --write-baseline resolves docs/baselines/ against the repo root, not bus/.
+    workingDir = rootDir
+}
