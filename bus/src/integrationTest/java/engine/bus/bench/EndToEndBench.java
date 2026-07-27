@@ -1,8 +1,14 @@
 package engine.bus.bench;
 
+import engine.bus.RedisStreamsEventPublisher;
+import engine.bus.RetentionPolicy;
+import engine.core.event.InstrumentId;
+import engine.core.serde.JsonEventCodec;
+import engine.core.serde.PayloadRegistry;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * NEG-22 end-to-end smoke and throughput harness — <em>not</em> a JUnit test, a plain {@code main} run
@@ -42,8 +48,37 @@ public final class EndToEndBench {
         }
 
         BenchReport report = new BenchReport(config, readRedisVersion(), Instant.now());
-        // Steps 2-5 append the generator, per-group and memory sections here.
+        List<InstrumentId> universe = TickGenerator.universe(config.instruments());
+        // Reset before anything subscribes: DEL drops each stream with its consumer groups, so a
+        // previous run's entries can neither be redelivered into this one's accounting nor inflate
+        // the soak's XLEN evidence.
+        resetBenchStreams(universe);
+
+        try (RedisStreamsEventPublisher publisher = new RedisStreamsEventPublisher(
+                REDIS_URI, new JsonEventCodec(PayloadRegistry.standard()), RetentionPolicy.standard())) {
+            TickGenerator generator = new TickGenerator(publisher, config);
+            generator.warmup();
+            report.addGenerator(generator.measure());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("e2eBench: interrupted");
+            System.exit(2);
+            return;
+        }
+
+        // Steps 3-5 append the per-group and memory sections here.
         System.out.println(report.render());
+    }
+
+    /** Drops every bench stream (and with it every bench consumer group) so each run starts clean. */
+    static void resetBenchStreams(List<InstrumentId> universe) {
+        RedisClient client = RedisClient.create(REDIS_URI);
+        try (StatefulRedisConnection<String, String> connection = client.connect()) {
+            List<String> streams = TickGenerator.streams(universe);
+            connection.sync().del(streams.toArray(String[]::new));
+        } finally {
+            client.shutdown();
+        }
     }
 
     /** Reads {@code redis_version} from {@code INFO server}; also proves Redis is reachable before the run. */

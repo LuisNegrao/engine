@@ -34,6 +34,24 @@ public final class BenchReport {
         sections.add(section);
     }
 
+    /** The publish side: what the generator actually put on the bus during the measured window. */
+    public void addGenerator(TickGenerator.Result result) {
+        StringBuilder section = new StringBuilder();
+        section.append(String.format("-------- generator --------%n"));
+        section.append(String.format("scheduled     : %,d events over %s%n", result.scheduled(), config.duration()));
+        section.append(String.format("published     : %,d%n", result.published()));
+        section.append(String.format("failed        : %,d%n", result.failed()));
+        if (result.failed() > 0) {
+            section.append(String.format("first failure : %s%n", result.firstFailure()));
+        }
+        section.append(String.format("wall          : %.3f s%n", result.wallSeconds()));
+        section.append(String.format(
+                "throughput    : %,.0f events/s achieved (%.2f%% of target)%n",
+                result.eventsPerSecond(), 100.0 * result.eventsPerSecond() / config.rate()));
+        section.append("=================================================");
+        sections.add(section.toString());
+    }
+
     public String render() {
         StringBuilder out = new StringBuilder(header());
         for (String section : sections) {
