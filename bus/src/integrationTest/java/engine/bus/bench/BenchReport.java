@@ -1,5 +1,8 @@
 package engine.bus.bench;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -17,6 +20,15 @@ public final class BenchReport {
 
     /** The gate the story fixes: per-group p99 publish→handler must stay under this. */
     static final Duration P99_BUDGET = Duration.ofMillis(50);
+
+    /**
+     * How close to the target rate counts as sustaining it. The generator schedules exactly {@code
+     * rate × duration} events and the wall clock includes the in-flight drain, so a flawless run lands
+     * fractionally <em>under</em> target and can never exceed it — a bare {@code >= rate} would fail
+     * every green run. A publisher that genuinely cannot keep up blocks on the in-flight window and
+     * misses by far more than 1 %, so this tolerance costs the gate no teeth.
+     */
+    private static final double THROUGHPUT_TOLERANCE = 0.99;
 
     private final BenchConfig config;
     private final String redisVersion;
@@ -52,12 +64,102 @@ public final class BenchReport {
         sections.add(section.toString());
     }
 
+    /**
+     * The delivery side, one block per consumer group. Fan-out isolation is read off this table:
+     * every group should show the same delivered count, 0 redeliveries, 0 final lag, and its own p99
+     * inside the budget.
+     */
+    public void addGroups(List<GroupProbe.Result> results) {
+        StringBuilder section = new StringBuilder();
+        section.append(String.format("-------- consumer groups --------%n"));
+        for (GroupProbe.Result result : results) {
+            section.append(String.format("group         : %s%n", result.group()));
+            section.append(String.format("  delivered   : %,d%n", result.delivered()));
+            section.append(String.format("  redeliveries: %,d%n", result.redeliveries()));
+            section.append(String.format("  throughput  : %,.0f events/s%n", result.eventsPerSecond()));
+            section.append(String.format(
+                    "  latency     : p50 %d ms, p90 %d ms, p99 %d ms, max %d ms%n",
+                    result.p50Millis(), result.p90Millis(), result.p99Millis(), result.maxMillis()));
+            section.append(String.format("  lag         : max %,d, final %,d%n", result.maxLag(), result.finalLag()));
+        }
+        section.append("=================================================");
+        sections.add(section.toString());
+    }
+
+    /**
+     * The gate, evaluated over everything measured. Every violated clause is named — a bare {@code
+     * FAIL} would send whoever runs this hunting through the tables for the reason.
+     *
+     * <p>Sustained throughput is judged on the <em>generator's</em> achieved rate, not on a group's
+     * delivered-per-second: the latter's denominator includes the drain tail, so a perfectly healthy
+     * run scores a few tenths of a percent under target. What the groups must prove is that they lost
+     * nothing ({@code delivered >= published}) and stayed inside the latency budget.
+     */
+    public Verdict verdict(TickGenerator.Result generated, List<GroupProbe.Result> groups) {
+        List<String> violations = new ArrayList<>();
+        if (generated.eventsPerSecond() < config.rate() * THROUGHPUT_TOLERANCE) {
+            violations.add(String.format(
+                    "sustained throughput %,.0f events/s is below the %,d events/s target (tolerance %.0f%%)",
+                    generated.eventsPerSecond(), config.rate(), THROUGHPUT_TOLERANCE * 100));
+        }
+        if (generated.failed() > 0) {
+            violations.add(String.format("%,d publishes failed", generated.failed()));
+        }
+        for (GroupProbe.Result group : groups) {
+            if (group.delivered() < generated.published()) {
+                violations.add(String.format(
+                        "%s lost events: delivered %,d of %,d published",
+                        group.group(), group.delivered(), generated.published()));
+            }
+            if (group.p99Millis() >= P99_BUDGET.toMillis()) {
+                violations.add(String.format(
+                        "%s p99 %d ms is not under the %d ms budget",
+                        group.group(), group.p99Millis(), P99_BUDGET.toMillis()));
+            }
+        }
+        return new Verdict(violations);
+    }
+
+    /** Appends the verdict block; call last so it reads as the report's bottom line. */
+    public void addVerdict(Verdict verdict) {
+        StringBuilder section = new StringBuilder();
+        section.append(String.format("-------- verdict --------%n"));
+        section.append(String.format("result        : %s%n", verdict.passed() ? "PASS" : "FAIL"));
+        for (String violation : verdict.violations()) {
+            section.append(String.format("violation     : %s%n", violation));
+        }
+        section.append("=================================================");
+        sections.add(section.toString());
+    }
+
     public String render() {
         StringBuilder out = new StringBuilder(header());
         for (String section : sections) {
             out.append('\n').append(section);
         }
         return out.toString();
+    }
+
+    /**
+     * Writes the report to this profile's baseline file, byte-identical to what stdout showed — the
+     * committed baseline is then literally the console output, with nothing to reconcile.
+     */
+    public void writeBaseline() throws IOException {
+        Path path = config.baselinePath();
+        Files.createDirectories(path.toAbsolutePath().getParent());
+        Files.writeString(path, render() + System.lineSeparator());
+    }
+
+    /** Pass/fail plus every clause that failed; empty violations is the only way to pass. */
+    public record Verdict(List<String> violations) {
+
+        public Verdict {
+            violations = List.copyOf(violations);
+        }
+
+        public boolean passed() {
+            return violations.isEmpty();
+        }
     }
 
     private String header() {

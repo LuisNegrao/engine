@@ -1,5 +1,6 @@
 package engine.bus.bench;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
 
@@ -110,6 +111,15 @@ public record BenchConfig(
     /** {@code smoke} or {@code soak} — names the baseline file and labels the report. */
     public String profile() {
         return soak ? "soak" : "smoke";
+    }
+
+    /**
+     * Where {@code --write-baseline} writes this profile's report. One file per profile: each run
+     * overwrites its own file wholesale and git history is the versioning. Relative to the repo root,
+     * which the {@code :bus:e2eBench} task sets as its working directory.
+     */
+    public Path baselinePath() {
+        return Path.of("docs", "baselines", "bus-e2e-" + profile() + ".md");
     }
 
     /** Redis/JVM memory series are only sampled (and gated on) in the soak profile. */

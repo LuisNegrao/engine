@@ -238,6 +238,36 @@ class SubscriberAcceptanceIntegrationTest {
         }
     }
 
+    /**
+     * NEG-22 — acks are fired without waiting for their reply, so this pins that they actually land.
+     * A dropped ack is invisible in normal operation: handlers run, lag looks healthy, and the loss
+     * only surfaces as a mass redelivery on the next restart.
+     *
+     * <p>There is deliberately no polling before the assertion. The last handler returns, its ack is
+     * issued, and {@code close()} is the barrier that must drain it — asserting an empty pending list
+     * immediately after close is what proves the flush, not just eventual delivery.
+     */
+    @Test
+    void acksLandWithoutWaitingAndCloseFlushesThem() throws Exception {
+        int n = 500;
+        CountDownLatch handled = new CountDownLatch(n);
+
+        try (RedisStreamsEventPublisher publisher =
+                new RedisStreamsEventPublisher(URI, codec, RetentionPolicy.standard())) {
+            RedisStreamsEventSubscriber subscriber =
+                    new RedisStreamsEventSubscriber(URI, codec, "ack-drain", "instance-a", FAST);
+            try {
+                subscriber.subscribe(ticks(), earliest(), e -> handled.countDown());
+                publishTicks(publisher, n);
+                assertThat(handled.await(15, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                subscriber.close();
+            }
+
+            assertThat(reader.xpending(TICKS, "ack-drain").getCount()).isZero();
+        }
+    }
+
     private List<EventSelector> intents() {
         return List.of(EventSelector.of(engine.core.event.OrderIntent.class));
     }

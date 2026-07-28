@@ -3,10 +3,13 @@ package engine.bus.bench;
 import engine.bus.RedisStreamsEventPublisher;
 import engine.bus.RetentionPolicy;
 import engine.core.event.InstrumentId;
+import engine.core.serde.EventCodec;
 import engine.core.serde.JsonEventCodec;
 import engine.core.serde.PayloadRegistry;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
+import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -27,6 +30,9 @@ import java.util.List;
 public final class EndToEndBench {
 
     static final String REDIS_URI = "redis://localhost:6379";
+
+    /** A group that has not caught up 60 s after the last publish is stuck, not slow. */
+    private static final Duration DRAIN_DEADLINE = Duration.ofSeconds(60);
 
     private EndToEndBench() {}
 
@@ -54,20 +60,66 @@ public final class EndToEndBench {
         // the soak's XLEN evidence.
         resetBenchStreams(universe);
 
-        try (RedisStreamsEventPublisher publisher = new RedisStreamsEventPublisher(
-                REDIS_URI, new JsonEventCodec(PayloadRegistry.standard()), RetentionPolicy.standard())) {
-            TickGenerator generator = new TickGenerator(publisher, config);
-            generator.warmup();
-            report.addGenerator(generator.measure());
+        EventCodec codec = new JsonEventCodec(PayloadRegistry.standard());
+        BenchReport.Verdict verdict;
+        try (RedisStreamsEventPublisher publisher =
+                new RedisStreamsEventPublisher(REDIS_URI, codec, RetentionPolicy.standard())) {
+            // Probes subscribe in their constructor, before a single event is published: LATEST groups
+            // miss everything published before they exist.
+            List<GroupProbe> probes = GroupProbe.createAll(REDIS_URI, codec, config, TickGenerator.selectors(universe));
+            try {
+                TickGenerator generator = new TickGenerator(publisher, config);
+                generator.warmup();
+                // Let the warmup drain out of the groups before arming, so no warmup event lands in
+                // the measured samples carrying a stale ingestedAt.
+                GroupProbe.awaitDrain(probes, DRAIN_DEADLINE);
+                probes.forEach(GroupProbe::arm);
+
+                TickGenerator.Result generated = generator.measure();
+                // Measure the tail rather than truncating it: the run is over when the groups are
+                // caught up, not when the last XADD returns.
+                GroupProbe.awaitDrain(probes, DRAIN_DEADLINE);
+                probes.forEach(GroupProbe::disarm);
+
+                List<GroupProbe.Result> groups = probes.stream()
+                        .map(p -> p.result(generated.published()))
+                        .toList();
+                report.addGenerator(generated);
+                report.addGroups(groups);
+                verdict = report.verdict(generated, groups);
+                report.addVerdict(verdict);
+            } finally {
+                probes.forEach(GroupProbe::close);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             System.err.println("e2eBench: interrupted");
             System.exit(2);
             return;
+        } catch (IllegalStateException e) {
+            System.err.println("e2eBench: " + e.getMessage());
+            System.exit(1);
+            return;
         }
 
-        // Steps 3-5 append the per-group and memory sections here.
         System.out.println(report.render());
+
+        if (config.writeBaseline()) {
+            try {
+                report.writeBaseline();
+                System.out.println("baseline written: " + config.baselinePath());
+            } catch (IOException e) {
+                System.err.println("e2eBench: could not write baseline: " + e);
+                System.exit(2);
+                return;
+            }
+        }
+
+        // The exit code is what makes this a gate rather than a suggestion: a missed target fails the
+        // Gradle task, so CI or a pre-release checklist can trust red/green without reading the report.
+        if (!verdict.passed()) {
+            System.exit(1);
+        }
     }
 
     /** Drops every bench stream (and with it every bench consumer group) so each run starts clean. */
