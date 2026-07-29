@@ -24,6 +24,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * (it forbids it only for production consumers). Because the rule prefixes are the concrete stream
  * classes, {@code dlq.*} and {@code replay.*} are unreachable by construction.
  *
+ * <p>Each stream is trimmed by <em>repeated</em> bounded {@code XTRIM} calls rather than one — see
+ * {@link #trimFully}; a single approximate call deletes at most 10,000 entries and would silently
+ * under-enforce the window on any busy stream.
+ *
  * <p>The trimmer <em>borrows</em> its connection: the wiring code that constructs publisher and
  * trimmer together owns both lifecycles, and {@link #close()} stops only the scheduler.
  */
@@ -77,7 +81,7 @@ public final class StreamTrimmer implements AutoCloseable {
             if (rule.prefix().endsWith(".")) {
                 trimMatching(rule.prefix(), args);
             } else {
-                commands.xtrim(rule.prefix(), args);
+                trimFully(rule.prefix(), args);
             }
         }
     }
@@ -88,10 +92,33 @@ public final class StreamTrimmer implements AutoCloseable {
         do {
             KeyScanCursor<String> page = commands.scan(cursor, scanArgs);
             for (String stream : page.getKeys()) {
-                commands.xtrim(stream, args);
+                trimFully(stream, args);
             }
             cursor = page;
         } while (!cursor.isFinished());
+    }
+
+    /**
+     * Trims one stream until nothing older than the cutoff is left, one bounded {@code XTRIM} at a
+     * time.
+     *
+     * <p>A single approximate {@code XTRIM} is <em>not</em> the whole sweep: with {@code ~} and no
+     * explicit {@code LIMIT}, Redis caps the work at {@code 100 × stream-node-max-entries} — 10,000
+     * entries by default — and returns having deleted only that much. One call per stream per 60 s
+     * sweep therefore enforces the retention window only up to ~166 entries/s per stream; above that
+     * the stream grows without bound while the sweep quietly reports success. NEG-22's soak caught
+     * exactly this at 400 entries/s per stream.
+     *
+     * <p>Looping until {@code XTRIM} reports 0 removed is deliberate in preference to passing {@code
+     * LIMIT 0} (unbounded in one call): Redis is single-threaded, and a backlog of millions of stale
+     * entries — the first sweep after an outage or a window change — would block every other client
+     * for the whole deletion. Ten thousand deletions per call keeps each command short and lets the
+     * event loop serve other traffic in between, at the cost of a few more round trips.
+     */
+    private void trimFully(String stream, XTrimArgs args) {
+        while (commands.xtrim(stream, args) > 0) {
+            // Keep going: each call deleted its cap, so there may be more outside the window.
+        }
     }
 
     /** Stops the scheduler; the borrowed connection stays open for its owner. */

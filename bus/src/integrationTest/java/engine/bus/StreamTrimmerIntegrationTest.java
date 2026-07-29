@@ -89,4 +89,42 @@ class StreamTrimmerIntegrationTest {
         assertThat(commands.xlen(DLQ_STREAM)).isEqualTo(1);
         assertThat(commands.xlen(REPLAY_STREAM)).isEqualTo(1);
     }
+
+    /**
+     * NEG-22 regression: one sweep must clear the whole backlog, however big.
+     *
+     * <p>{@code XTRIM ~ MINID} with no explicit {@code LIMIT} deletes at most {@code 100 ×
+     * stream-node-max-entries} — 10,000 entries — per call and then returns as if it had succeeded. A
+     * sweep that issued one call per stream enforced the retention window only up to ~166 entries/s
+     * per stream; above that the stream grew without bound and the trimmer reported nothing wrong.
+     * NEG-22's soak found this at 400 entries/s per stream, with Redis past 2 GB and still climbing.
+     *
+     * <p>25,000 aged entries is deliberately more than two of those caps, so a single-call sweep
+     * leaves 15,000 behind and this test fails loudly rather than by a rounding margin. Entries are
+     * small here — this asserts the deletion <em>count</em>, not the node-boundary exactness the test
+     * above uses oversized bodies for, so approximate trimming may spare the final partial node.
+     */
+    @Test
+    void sweepClearsABacklogLargerThanOneApproximateTrimCall() {
+        Instant now = Instant.now();
+        long agedMillis = now.minus(Duration.ofHours(13)).toEpochMilli();
+        long freshMillis = now.minus(Duration.ofHours(1)).toEpochMilli();
+
+        Map<String, byte[]> body = Map.of("event", new byte[16]);
+        for (int seq = 0; seq < 25_000; seq++) {
+            commands.xadd(TRADE_STREAM, new XAddArgs().id(agedMillis + "-" + seq), body);
+        }
+        commands.xadd(TRADE_STREAM, new XAddArgs().id(freshMillis + "-0"), body);
+
+        try (StreamTrimmer trimmer =
+                new StreamTrimmer(connection, RetentionPolicy.standard(), Clock.fixed(now, ZoneOffset.UTC))) {
+            trimmer.runOnce();
+        }
+
+        // One node's worth of aged entries may survive node-granular trimming; 15,000 may not.
+        assertThat(commands.xlen(TRADE_STREAM)).isLessThan(200);
+        assertThat(commands.xrange(TRADE_STREAM, Range.<String>unbounded()))
+                .last()
+                .satisfies(entry -> assertThat(entry.getId()).startsWith(freshMillis + "-"));
+    }
 }

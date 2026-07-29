@@ -46,6 +46,9 @@ public final class TickGenerator {
     /** One slot in five is a trade: the ADR's 4:1 quote/trade ratio. */
     private static final int MIX_PERIOD = 5;
 
+    private static final String QUOTE_PREFIX = "md.tick.quote.";
+    private static final String TRADE_PREFIX = "md.tick.trade.";
+
     private final EventPublisher publisher;
     private final BenchConfig config;
     private final List<InstrumentId> instruments;
@@ -92,11 +95,29 @@ public final class TickGenerator {
     /** The stream names this generator writes; used to reset bench state before a run. */
     public static List<String> streams(List<InstrumentId> universe) {
         List<String> streams = new ArrayList<>(universe.size() * 2);
-        for (InstrumentId instrument : universe) {
-            streams.add("md.tick.quote." + instrument);
-            streams.add("md.tick.trade." + instrument);
-        }
+        streams.addAll(quoteStreams(universe));
+        streams.addAll(tradeStreams(universe));
         return List.copyOf(streams);
+    }
+
+    /** The {@code md.tick.quote.*} streams, one per instrument — the soak's {@code XLEN} census reads these. */
+    public static List<String> quoteStreams(List<InstrumentId> universe) {
+        return universe.stream().map(instrument -> QUOTE_PREFIX + instrument).toList();
+    }
+
+    /** The {@code md.tick.trade.*} streams, one per instrument. */
+    public static List<String> tradeStreams(List<InstrumentId> universe) {
+        return universe.stream().map(instrument -> TRADE_PREFIX + instrument).toList();
+    }
+
+    /** Share of published events that are quotes — the expectation side of the soak's stream census. */
+    public static double quoteShare() {
+        return (MIX_PERIOD - 1) / (double) MIX_PERIOD;
+    }
+
+    /** Share of published events that are trades. */
+    public static double tradeShare() {
+        return 1.0 / MIX_PERIOD;
     }
 
     public List<InstrumentId> instruments() {

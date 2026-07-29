@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * The harness's single rendering path: {@link #render()} produces the exact text that goes to stdout
@@ -87,6 +88,48 @@ public final class BenchReport {
     }
 
     /**
+     * The soak profile's memory evidence: both series cut into thirds, and the end-of-run {@code XLEN}
+     * census that shows retention trimming engaged. Absent from the smoke report entirely — a 2-minute
+     * run cannot outlive any retention window, so it has nothing to say about either.
+     */
+    public void addMemory(SoakSampler.Result memory) {
+        StringBuilder section = new StringBuilder();
+        section.append(String.format("-------- memory (soak) --------%n"));
+        section.append(String.format(
+                "sampled       : every %d s; the first third is the fill phase and is excluded from the verdict%n",
+                SoakSampler.SAMPLE_INTERVAL.toSeconds()));
+        for (SoakSampler.Series series : List.of(memory.redis(), memory.jvm())) {
+            section.append(String.format("%s (%d samples)%n", series.name(), series.samples()));
+            for (SoakSampler.Third third : series.thirds()) {
+                section.append(String.format(
+                        "  %-12s: min %,d MB, median %,d MB, max %,d MB (%d samples)%n",
+                        third.label() + " third", third.minMb(), third.medianMb(), third.maxMb(), third.samples()));
+            }
+            if (series.judged()) {
+                section.append(String.format(
+                        "  verdict     : %s (final median %.3fx middle median, allowance %.3fx)%n",
+                        series.flat() ? "FLAT" : "GROWING", series.ratio(), SoakSampler.DRIFT_ALLOWANCE));
+            } else {
+                section.append(String.format("  verdict     : NOT JUDGED (too few samples)%n"));
+            }
+        }
+        section.append(String.format("stream retention%n"));
+        for (SoakSampler.StreamCensus census : memory.census()) {
+            section.append(String.format(
+                    "  %-16s: window %s, expected ~%,d entries, observed min %,d / median %,d / max %,d over %d streams%n",
+                    census.prefix(),
+                    census.window(),
+                    census.expected(),
+                    census.minLength(),
+                    census.medianLength(),
+                    census.maxLength(),
+                    census.streams()));
+        }
+        section.append("=================================================");
+        sections.add(section.toString());
+    }
+
+    /**
      * The gate, evaluated over everything measured. Every violated clause is named — a bare {@code
      * FAIL} would send whoever runs this hunting through the tables for the reason.
      *
@@ -94,8 +137,12 @@ public final class BenchReport {
      * delivered-per-second: the latter's denominator includes the drain tail, so a perfectly healthy
      * run scores a few tenths of a percent under target. What the groups must prove is that they lost
      * nothing ({@code delivered >= published}) and stayed inside the latency budget.
+     *
+     * <p>{@code memory} is present only in the soak profile, and its flatness verdicts join the gate
+     * on equal terms: a soak that leaks fails the task exactly as a missed p99 does.
      */
-    public Verdict verdict(TickGenerator.Result generated, List<GroupProbe.Result> groups) {
+    public Verdict verdict(
+            TickGenerator.Result generated, List<GroupProbe.Result> groups, Optional<SoakSampler.Result> memory) {
         List<String> violations = new ArrayList<>();
         if (generated.eventsPerSecond() < config.rate() * THROUGHPUT_TOLERANCE) {
             violations.add(String.format(
@@ -117,6 +164,7 @@ public final class BenchReport {
                         group.group(), group.p99Millis(), P99_BUDGET.toMillis()));
             }
         }
+        memory.map(SoakSampler.Result::violations).ifPresent(violations::addAll);
         return new Verdict(violations);
     }
 
