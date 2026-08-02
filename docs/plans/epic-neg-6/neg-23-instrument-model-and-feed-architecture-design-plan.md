@@ -77,8 +77,8 @@ Read the draft against ADR 0001 (tick split), ADR 0002 (grammar, frozen streams,
 
 ## Definition of done (mapped to the issue)
 
-- [ ] Accepted ADR in `docs/adr/` answering all six questions, each a `##` section naming the rejected alternatives → Steps 2–4.
-- [ ] No code beyond what the ADR needs to demonstrate naming/mapping rules → the record sketch and mapping table are markdown; the only executable artifact is the throwaway Step 1 spike, which lands as a table, not code.
+- [x] Accepted ADR in `docs/adr/` answering all six questions, each a `##` section naming the rejected alternatives → [ADR 0004](../../adr/0004-instrument-model-and-feed-architecture.md), §§1–3 (model, population, grammar) and §§4–8 (boundaries, timestamps, feed status, universe, archival). Two sections beyond the six were forced by the consistency review: §6 feed status (NEG-26 defers its thresholds here) and §4's bar window semantics (NEG-27 defers those here).
+- [x] No code beyond what the ADR needs to demonstrate naming/mapping rules → the record sketch and mapping table are markdown; the only executable artifact was the throwaway NEG-29 spike, which landed as a table. `git status` shows `docs/` only.
 
 ## Pitfalls to expect
 
